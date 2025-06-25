@@ -39,6 +39,15 @@ class Settings(BaseSettings):
     server_channel_mappings: Dict[str, Dict[str, str]] = Field(default_factory=dict)
     
     # Лимиты 
+    initial_sync_message_limit: int = Field(default=2, ge=1, le=10, 
+                                          description="Messages per channel during initial sync")
+    polling_message_limit: int = Field(default=3, ge=1, le=10,
+                                     description="Max new messages per polling cycle")
+    api_request_message_limit: int = Field(default=5, ge=1, le=20,
+                                         description="Max messages per API request")
+    strict_message_limits: bool = Field(default=True,
+                                      description="Enforce strict message limits")
+    # Channel and Server Limits
     max_channels_per_server: int = Field(default=5, ge=1, le=20, env="MAX_CHANNELS_PER_SERVER")
     max_total_channels: int = Field(default=100, ge=10, le=500, env="MAX_TOTAL_CHANNELS")
     max_servers: int = Field(default=50, ge=5, le=100, env="MAX_SERVERS")

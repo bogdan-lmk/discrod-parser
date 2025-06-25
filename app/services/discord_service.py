@@ -450,7 +450,11 @@ class DiscordService:
             return []
 
         messages = []
-        actual_limit = min(limit, 20)  # Increased limit for better message retrieval
+        actual_limit = min(max(1, limit), self.settings.api_request_message_limit)
+        
+        # СТРОГОЕ соблюдение лимитов если включено
+        if self.settings.strict_message_limits:
+            actual_limit = min(actual_limit, limit)
         
         for attempt in range(self.max_retries):
             try:
@@ -575,7 +579,11 @@ class DiscordService:
         last_seen_message_id = self.last_seen_message_per_channel.get(channel_id)
         
         messages = []
-        actual_limit = min(limit, 20)
+        actual_limit = min(max(1, limit), self.settings.polling_message_limit)
+        
+        # СТРОГОЕ соблюдение лимитов если включено
+        if self.settings.strict_message_limits:
+            actual_limit = min(actual_limit, limit)
         
         try:
             await self.rate_limiter.wait_if_needed(f"new_messages_{channel_id}")
@@ -778,7 +786,11 @@ class DiscordService:
         """ИСПРАВЛЕНО: Poll канал ТОЛЬКО для новых сообщений"""
         try:
             # Получаем ТОЛЬКО новые сообщения
-            new_messages = await self.get_new_messages_only(server_name, channel_id, limit=10)
+            new_messages = await self.get_new_messages_only(
+                server_name, 
+                channel_id, 
+                limit=self.settings.polling_message_limit
+            )
             
             if new_messages:
                 channel_info = self.servers[server_name].channels[channel_id]

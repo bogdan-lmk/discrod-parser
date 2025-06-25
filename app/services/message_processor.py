@@ -345,7 +345,7 @@ class MessageProcessor:
                     messages = await self.discord_service.get_recent_messages(
                         server_name,
                         channel_id,
-                        limit=5
+                        limit=self.settings.initial_sync_message_limit
                     )
                     
                     if messages:
@@ -553,7 +553,7 @@ class MessageProcessor:
             try:
                 # Get only very recent messages (last 2 minutes)
                 messages = await self.discord_service.get_recent_messages(
-                    server_name, channel_id, limit=3
+                    server_name, channel_id, limit=min(3, self.settings.polling_message_limit)
                 )
                 
                 last_processed = self.last_processed_message_per_channel.get(channel_id)

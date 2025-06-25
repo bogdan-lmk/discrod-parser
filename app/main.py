@@ -279,6 +279,7 @@ async def get_enhanced_telegram_stats(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Enhanced stats error: {str(e)}")
+    
 @app.post("/servers/{server_name}/sync")
 async def sync_server(
     server_name: str,
@@ -286,31 +287,46 @@ async def sync_server(
     discord_service: DiscordService = Depends(get_discord_service_dependency),
     telegram_service: TelegramService = Depends(get_telegram_service_dependency)
 ):
-    """ИСПРАВЛЕНО: Manually sync a specific server (only monitored channels)"""
+    """ИСПРАВЛЕНО: Manually sync a specific server (only monitored channels) с лимитами"""
     if server_name not in discord_service.servers:
         raise HTTPException(status_code=404, detail="Server not found")
     
     async def sync_task():
-        """Background sync task"""
+        """Background sync task с соблюдением лимитов"""
         logger = structlog.get_logger(__name__)
         try:
             server_info = discord_service.servers[server_name]
             monitored_messages = []
             
-            # ИСПРАВЛЕНИЕ: Get messages only from monitored channels
+            # ИСПРАВЛЕНИЕ: Get messages only from monitored channels с лимитами
             monitored_channels = []
             for channel_id, channel_info in server_info.accessible_channels.items():
                 if channel_id in discord_service.monitored_announcement_channels:
                     monitored_channels.append((channel_id, channel_info))
                     
+                    # ИСПРАВЛЕНИЕ: Используем лимит из настроек вместо фиксированного 5
+                    sync_limit = discord_service.settings.initial_sync_message_limit
+                    
                     messages = await discord_service.get_recent_messages(
-                        server_name, channel_id, limit=5
+                        server_name, 
+                        channel_id, 
+                        limit=sync_limit
                     )
                     monitored_messages.extend(messages)
             
             if monitored_messages:
                 # Sort by timestamp and send to Telegram (all to same topic)
                 monitored_messages.sort(key=lambda x: x.timestamp)
+                
+                # ИСПРАВЛЕНИЕ: Применяем лимит на общее количество сообщений
+                max_total_messages = discord_service.settings.message_batch_size * len(monitored_channels)
+                if len(monitored_messages) > max_total_messages:
+                    # Берем самые новые сообщения если превышен лимит
+                    monitored_messages = monitored_messages[-max_total_messages:]
+                    logger.warning("Messages limited for sync",
+                                 total_found=len(monitored_messages) + (len(monitored_messages) - max_total_messages),
+                                 limited_to=max_total_messages)
+                
                 sent_count = await telegram_service.send_messages_batch(monitored_messages)
                 
                 # Get topic info
@@ -321,14 +337,16 @@ async def sync_server(
                                           if discord_service._is_announcement_channel(ch_info.channel_name))
                 manual_channels = len(monitored_channels) - announcement_channels
                 
-                logger.info("Manual sync completed", 
+                logger.info("Manual sync completed with limits", 
                           server=server_name,
                           messages_sent=sent_count,
                           total_messages=len(monitored_messages),
                           topic_id=topic_id,
                           monitored_channels=len(monitored_channels),
                           announcement_channels=announcement_channels,
-                          manual_channels=manual_channels)
+                          manual_channels=manual_channels,
+                          sync_limit_per_channel=sync_limit,
+                          strict_limits=discord_service.settings.strict_message_limits)
             else:
                 logger.info("No monitored channels found during manual sync", 
                           server=server_name,
@@ -350,7 +368,12 @@ async def sync_server(
         "monitored_channels": monitored_count,
         "total_channels": len(server_info.accessible_channels),
         "current_topic_id": telegram_service.server_topics.get(server_name),
-        "anti_duplicate_protection": getattr(telegram_service, 'startup_verification_done', True)
+        "anti_duplicate_protection": getattr(telegram_service, 'startup_verification_done', True),
+        "limits_applied": {
+            "messages_per_channel": discord_service.settings.initial_sync_message_limit,
+            "max_total_batch": discord_service.settings.message_batch_size * monitored_count,
+            "strict_mode": discord_service.settings.strict_message_limits
+        }
     }
 
 
@@ -371,7 +394,7 @@ async def get_recent_messages(
         messages = await discord_service.get_recent_messages(
             request.server_name,
             request.channel_id,
-            limit=request.limit
+            limit=request.effective_limit
         )
         
         # Определяем тип канала
